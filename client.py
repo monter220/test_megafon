@@ -1,65 +1,91 @@
 import socket
+import datetime
 import random
 import asyncio
 import threading
+import logging
 
 
-def handle_connection(sock, addr):
-    print("Connected by", addr)
-    with sock:
+COUNT_OF_CLIENTS: int = 5
+COUNT_OF_ECHO: int = 5
+IP_SERVER: str = '127.0.0.1'
+PORT_SERVER: int = 53210
+TEST_ECHO_MESSAGE: bytes = b'Hello, world'
+MAX_SEC_BETWEEN_REQUEST: int = 10
+MIN_SEC_BETWEEN_REQUEST: int = 1
+LOG_NAME: str = 'log'
+
+
+def handle_connection(connect, address) -> None:
+    """Обработка сервером запросов от клиента"""
+    logging.info(f'SERVER: Connected by {address}')
+    with connect:
         while True:
-            # Пока клиент не отключился, читаем передаваемые
-            # им данные и отправляем их обратно
-            data = sock.recv(1024)
+            data: bytes = connect.recv(1024)
             if not data:
-                # Клиент отключился
                 break
-            sock.sendall(data)
-
-        sock.close()
-        print('close')
-
-
-async def connect_client(k):
-    client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client_sock.connect(('127.0.0.1', 53210))
-    await asyncio.sleep(0.1)
-    i = 0
-    while i<5:
-        client_sock.sendall(b'Hello, world')
-        data = client_sock.recv(1024)
-        print(f'Received client {k} {i}', repr(data))
-        i+=1
-        await asyncio.sleep(random.randint(1,10))
-    client_sock.close()
+            connect.sendall(data)
+        connect.close()
+        logging.info(f'SERVER: Closed by {address}')
 
 
-def connect_server():
+def connect_server() -> None:
+    """
+    Ожидание подключения к серверу.
+    Создание нового сопотока для обработки подключения к серверу.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as serv_sock:
-        serv_sock.bind(('', 53210))
+        serv_sock.bind((IP_SERVER, PORT_SERVER))
         serv_sock.listen(1)
-        i = 0
-        while i<5:
-            print("Waiting for connection...")
+        client_connections: int = 0
+        while client_connections < COUNT_OF_CLIENTS:
+            logging.info('SERVER: Waiting for connection...')
             sock, addr = serv_sock.accept()
-            t = threading.Thread(target=handle_connection, args=(sock, addr))
-            t.start()
-            i+=1
+            soprocess = threading.Thread(
+                target=handle_connection, args=(sock, addr))
+            soprocess.start()
+            client_connections += 1
 
 
-async def tread_s():
-    t = threading.Thread(target=connect_server)
-    t.start()
+async def new_server_process() -> None:
+    """Запуск сервера в новом потоке"""
+    soprocess = threading.Thread(target=connect_server)
+    soprocess.start()
 
 
-ioloop = asyncio.get_event_loop()
-tasks = [
-    ioloop.create_task(tread_s()),
-    ioloop.create_task(connect_client(1)),
-    ioloop.create_task(connect_client(2)),
-    ioloop.create_task(connect_client(3)),
-    ioloop.create_task(connect_client(4)),
-    ioloop.create_task(connect_client(5)),
-]
-ioloop.run_until_complete(asyncio.wait(tasks))
-ioloop.close()
+async def connect_client(client_number: int) -> None:
+    """
+    Подключение клиента к серверу
+    с передачей сообщений и получением эхо ответа.
+    """
+    client_connect: socket = socket.socket(
+        socket.AF_INET, socket.SOCK_STREAM)
+    client_connect.connect((IP_SERVER, PORT_SERVER))
+    message_number: int = 0
+    while message_number < COUNT_OF_ECHO:
+        client_connect.sendall(TEST_ECHO_MESSAGE)
+        data: bytes = client_connect.recv(1024)
+        logging.info(
+            'CLIENT: Received client '
+            f'{client_number} {message_number} {repr(data)}')
+        message_number += 1
+        await asyncio.sleep(random.randint(
+            MIN_SEC_BETWEEN_REQUEST, MAX_SEC_BETWEEN_REQUEST))
+    client_connect.close()
+
+
+if __name__ == '__main__':
+    start: datetime = datetime.datetime.now()
+    logging.basicConfig(
+        level=logging.INFO, filename=f'{LOG_NAME}.log', filemode='w',
+        format='%(asctime)s %(levelname)s %(message)s'
+    )
+    ioloop = asyncio.get_event_loop()
+    tasks = [
+        ioloop.create_task(new_server_process()),
+    ]
+    for client in range(COUNT_OF_CLIENTS):
+        tasks.append(ioloop.create_task(connect_client(client)))
+    ioloop.run_until_complete(asyncio.wait(tasks))
+    ioloop.close()
+    logging.info(f'WORK TIME: {datetime.datetime.now()-start} sec')
